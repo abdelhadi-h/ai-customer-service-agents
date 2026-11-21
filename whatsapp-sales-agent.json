@@ -1,0 +1,2059 @@
+{
+  "name": "AI Sales Agent - WhatsApp Orders (Agent + Sheets)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "fb-sales-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4bc8ca41-7375-4147-8b7c-7e203f68eb7a",
+      "name": "WhatsApp Webhook Verify (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        16,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f125afb6-6d90-46ae-a9a2-fbc92311d499",
+              "leftValue": "={{ $json.query['hub.verify_token'] }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "habibi2006"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1daa6a24-c4c2-4161-ae40-797831b0e281",
+      "name": "Verify Token OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        256,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.challenge'] }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "e1b10174-73cd-40fa-b10a-5be7dabb6601",
+      "name": "Respond Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        496,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Forbidden",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "71c360a5-cd8e-4355-809e-702cf0aa7ddc",
+      "name": "Respond 403",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        496,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fb-sales-agent",
+        "options": {}
+      },
+      "id": "256dbb27-b5d5-4766-82f8-1bb8ba2cc1c1",
+      "name": "WhatsApp Webhook (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        16,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize WhatsApp Cloud API webhook -> one item per customer message (dedup by wamid). Status receipts are ignored.\nconst out = [];\nconst sd = $getWorkflowStaticData('global');\nsd.seen = sd.seen || [];\nconst S = v => (v === null || v === undefined) ? '' : String(v).trim();\nconst messageText = m => {\n  const type = S(m.type);\n  if (type === 'text') return S(m.text && m.text.body);\n  if (type === 'interactive') {\n    const i = m.interactive || {};\n    const r = i.button_reply || i.list_reply || {};\n    return S(r.title);\n  }\n  if (type === 'button') return S(m.button && (m.button.text || m.button.payload));\n  if (['image', 'audio', 'video', 'document', 'sticker'].includes(type)) return '[attachment: ' + type + ']';\n  if (type === 'location') return '[location]';\n  return '';   // reaction, system, order, unsupported ... -> skipped\n};\nfor (const item of $input.all()) {\n  const body = item.json.body || item.json;\n  if (!body || body.object !== 'whatsapp_business_account') continue;\n  for (const entry of (body.entry || [])) {\n    for (const ch of (entry.changes || [])) {\n      const v = ch && ch.value;\n      if (!v || (ch.field && ch.field !== 'messages')) continue;\n      const phone_number_id = S(v.metadata && v.metadata.phone_number_id);\n      const contacts = v.contacts || [];\n      // value.statuses[] (sent/delivered/read) is deliberately never read\n      for (const m of (v.messages || [])) {\n        if (!m || !m.from || !m.id) continue;\n        const id = S(m.id);\n        if (sd.seen.includes(id)) continue;          // WhatsApp retries webhooks\n        const text = messageText(m);\n        if (!text) continue;\n        sd.seen.push(id);\n        const wa_id = S(m.from);\n        const c = contacts.find(x => S(x.wa_id) === wa_id) || contacts[0] || {};\n        const secs = Number(m.timestamp);\n        out.push({ json: {\n          event_id: 'w_' + id,\n          phone_number_id,\n          wa_id,\n          profile_name: S(c.profile && c.profile.name),\n          text,\n          timestamp: new Date(secs > 0 ? secs * 1000 : Date.now()).toISOString()\n        }});\n      }\n    }\n  }\n}\nif (sd.seen.length > 300) sd.seen = sd.seen.slice(-300);\nreturn out;\n"
+      },
+      "id": "92f8b6fb-0cad-46df-a759-f5d7aab5b26b",
+      "name": "Normalize Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ae97fe48-96b3-42e8-87c2-0452d0c7213e",
+              "name": "cfg_sheet_id",
+              "value": "YOUR_GOOGLE_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "6efb2e76-d489-4b02-98e6-ed442a82e63e",
+              "name": "cfg_phone_number_id",
+              "value": "REPLACE_WITH_PHONE_NUMBER_ID",
+              "type": "string"
+            },
+            {
+              "id": "3b7e1c52-6a0d-4f0e-9d11-5c2a7f0e4a01",
+              "name": "cfg_waba_id",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "ffad3e21-9d33-40bd-89e3-50293b1b34da",
+              "name": "cfg_business_name",
+              "value": "REPLACE_BUSINESS_NAME",
+              "type": "string"
+            },
+            {
+              "id": "30894d54-247c-4959-9c34-b83291966a4b",
+              "name": "cfg_notify_chat_id",
+              "value": "REPLACE_TELEGRAM_CHAT_ID",
+              "type": "string"
+            },
+            {
+              "id": "b265d22b-2ed4-49ef-8a3a-cb110394c649",
+              "name": "cfg_graph_version",
+              "value": "v23.0",
+              "type": "string"
+            },
+            {
+              "id": "5d1c2a90-7e41-4b6f-8a3d-0c9e1f2b3a01",
+              "name": "cfg_owner_wa_id",
+              "value": "REPLACE_WITH_OWNER_WA_ID",
+              "type": "string"
+            },
+            {
+              "id": "8e2f4b61-3c7a-4d95-b1e0-6a5d9c8f7b02",
+              "name": "cfg_use_telegram_fallback",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "f25cd12b-2938-4a3e-b145-a75ac32116dd",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        496,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "9249ddad-5a90-4019-8c88-9c71da0356ae",
+              "leftValue": "={{ $json.phone_number_id }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "={{ $json.cfg_phone_number_id }}"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e55fbaa9-03b0-4caf-a14c-97fbe42e3236",
+      "name": "Number Match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        736,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "habibi",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1550495200,
+          "mode": "list",
+          "cachedResultName": "PRODUCTS",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=1550495200"
+        },
+        "options": {}
+      },
+      "id": "cd7eb28b-ad72-42a0-957b-2ff1aaec1a43",
+      "name": "Get Products",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        976,
+        640
+      ],
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": null,
+          "name": ""
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pack PRODUCTS rows (read once per webhook call) and attach them to every event\nconst S = v => (v === null || v === undefined) ? '' : String(v).trim();\nconst num = v => { const t = S(v).replace(/\\s/g, ''); return t !== '' && isFinite(Number(t)) ? Number(t) : null; };\nconst list = v => S(v) ? S(v).split(/[,،|]/).map(s => s.trim()).filter(Boolean) : [];\nconst products = $('Get Products').all()\n  .map(i => i.json)\n  .filter(r => S(r.product_id) && S(r.active).toUpperCase() !== 'FALSE')\n  .map(r => ({\n    id: S(r.product_id),\n    name: S(r.product_name),\n    category: S(r.category),\n    description: S(r.description).slice(0, 220),\n    retail_price: num(r.retail_price),\n    wholesale_price: num(r.wholesale_price),\n    wholesale_min_quantity: num(r.wholesale_min_quantity),\n    stock: num(r.stock),\n    sizes: list(r.sizes),\n    colors: list(r.colors),\n    delivery_info: S(r.delivery_info)\n  }));\nreturn $('Number Match?').all().map(i => ({ json: Object.assign({}, i.json, { products }) }));\n"
+      },
+      "id": "f9eaf968-a995-4cb4-a728-7f3e213cbfbc",
+      "name": "Pack Products",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "habibi",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 306981349,
+          "mode": "list",
+          "cachedResultName": "CUSTOMERS",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=306981349"
+        },
+        "options": {}
+      },
+      "id": "6f48f4f4-3494-4150-a5b5-a6e46405bfc0",
+      "name": "Get Customer",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1696,
+        640
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": null,
+          "name": ""
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Build the agent context for ONE event (runOnceForEachItem). $json = customer row from CUSTOMERS (or empty)\nconst ev = $('Loop Over Events').item.json;\nconst cust = $json || {};\nconst products = ev.products || [];\nconst S = v => (v === null || v === undefined) ? '' : String(v).trim();\nconst num = v => { const t = S(v).replace(/\\s/g, ''); return t !== '' && isFinite(Number(t)) ? Number(t) : null; };\n\nconst isNew = !S(cust.facebook_user_id);\nconst prevRaw = S(cust.order_status) || 'none';\nconst finished = (prevRaw === 'confirmed' || prevRaw === 'cancelled');   // previous order closed -> fresh order\nlet d = {};\ntry { d = JSON.parse(S(cust.draft_json) || '{}'); } catch (e) { d = {}; }\nif (finished) d = {};\n\nconst digits = x => S(x).split('').filter(c => c >= '0' && c <= '9').join('');\nconst normPhone = x => { let d = digits(x); if (d.startsWith('213')) d = '0' + d.slice(3); else if (d.length === 9 && d[0] >= '5' && d[0] <= '7') d = '0' + d; return /^0[5-7][0-9]{8}$/.test(d) ? d : ''; };\nconst waPhone = normPhone(ev.wa_id);   // 213XXXXXXXXX -> 0XXXXXXXXX (empty if not an Algerian mobile)\n\nconst state = {\n  returning_customer: !isNew && (num(cust.total_orders) || 0) > 0,\n  customer_name: S(cust.customer_name),\n  phone: normPhone(cust.phone) || waPhone,\n  whatsapp_profile_name: S(ev.profile_name),\n  wilaya: S(cust.wilaya),\n  commune: S(cust.commune),\n  customer_type: S(cust.customer_type) || 'unknown',\n  product: S(d.product),\n  quantity: num(d.quantity),\n  size: S(d.size),\n  color: S(d.color),\n  notes: S(d.notes),\n  order_status: finished ? 'none' : prevRaw\n};\nconst paused = S(cust.status) === 'human_required';\n\nconst catalog = products.map(p => ({\n  product_name: p.name, category: p.category, description: p.description,\n  retail_price: p.retail_price, wholesale_price: p.wholesale_price, wholesale_min_quantity: p.wholesale_min_quantity,\n  stock: p.stock, sizes: p.sizes, colors: p.colors, delivery_info: p.delivery_info\n}));\n\nconst SYSTEM_PROMPT = [\n'You are a human sales employee of \"' + ev.cfg_business_name + '\", an Algerian online shop that sells on WhatsApp. You chat with customers on WhatsApp Business and take their orders.',\n'',\n'# LANGUAGE AND TONE',\n'- Reply in the customer\\'s own language: Algerian Darija (Arabic script or Latin/Arabizi), Arabic, French, or a mix. Mirror them. Default: Algerian Darija in Arabic script.',\n'- Sound like a real, friendly shop employee. Short messages (1 to 3 short lines), light emoji sometimes. Never robotic, never long, never more than ONE question per message.',\n'- WhatsApp format: plain text only. No markdown, no headings, no bullet syntax, no links formatting. If you really need bold, use single asterisks like *this*, never double asterisks.',\n'- Understand Algerian vocabulary: شحال / بشحال / prix = price; كاين / متوفر = available?; دطاي / détail = retail; الجملة / gros / en gros = wholesale; زوج / حبة / قطعة = pair / piece; \"3 زوج\" = 3 pairs; Arabic or Latin digits.',\n'',\n'# ABSOLUTE DATA RULE',\n'Use ONLY facts found in CATALOG below. NEVER invent or guess: price, stock, colors, sizes, delivery fee or delay, discounts, offers, warranty, product features. If a needed fact is missing or contradictory, do not guess: set human_required=true. Prices are in Algerian dinars (DA).',\n'If the customer has not chosen a product, help them choose from CATALOG and set \"product\" to the EXACT product_name once chosen. If the product is not in CATALOG, or CATALOG is empty: human_required=true, handoff_reason=\"unavailable_product\".',\n'',\n'# EACH TURN',\n'1. Read the customer message together with CURRENT STATE (and the chat history).',\n'2. Choose ONE intent: greeting, price_question, product_question, availability, size, color, delivery, wholesale_question, retail_purchase, wholesale_purchase, order_creation, order_confirmation, cancellation, complaint, human_required, unrelated, spam.',\n'3. Answer the question using the data, then gently move toward the order.',\n'4. Fill JSON fields only with what the customer actually said. Keep the values already in CURRENT STATE.',\n'5. NEVER ask again for something already in CURRENT STATE. A returning customer already has name, phone, wilaya, commune: use them, only update if the customer says they changed. Ask for ONLY ONE missing thing: the most important next one.',\n'',\n'# RETAIL vs WHOLESALE',\n'- retail: \"نحب وحدة\", \"زوج واحد\", \"نحب هذا\", quantity 1 or 2.',\n'- wholesale inquiry (NOT an order): \"شحال الجملة؟\", \"prix gros\", \"عندي محل\", \"نعاود نبيع\". Set customer_type=\"wholesale\", intent=\"wholesale_question\", give wholesale_price and wholesale_min_quantity from CATALOG, then ask the quantity. Do NOT start an order.',\n'- wholesale purchase: \"نحتاج 30 زوج\" => customer_type=\"wholesale\", intent=\"wholesale_purchase\", quantity=that number, then continue like a normal order.',\n'- Otherwise customer_type stays \"unknown\". Never invent wholesale discounts.',\n'',\n'# ORDER COLLECTION (progressively, one question at a time)',\n'Order: product -> quantity -> size (only if the product has sizes) -> color (only if it has colors) -> customer_name -> wilaya -> commune -> delivery notes (optional). The phone number is already known from WhatsApp (see PHONE below).',\n'If the customer gives several details at once, accept all of them and ask only what is still missing. Size and color must belong to the product lists. Quantity must not exceed stock.',\n'PHONE: the customer writes from WhatsApp, so CURRENT STATE.phone is normally already filled with their number. NEVER ask for the phone number. Only if you really need to double-check, ask once: نتصلو بيك على هذا الرقم؟ If the customer gives a different number, put it in the phone field and use it. Only when CURRENT STATE.phone is empty, ask for an Algerian number (10 digits starting with 05, 06 or 07, or +213...). If a given number is invalid, ask again politely.',\n'CURRENT STATE.whatsapp_profile_name is only a hint (the WhatsApp display name). You may use it to greet, but still collect customer_name (full name for delivery) unless customer_name is already filled.',\n'',\n'# CONFIRMATION (strict)',\n'- When everything is collected: order_status=\"ready_for_confirmation\" and write a short recap asking \"نأكدلك الطلب؟\" (the system formats the exact recap and prices).',\n'- ONLY if CURRENT STATE.order_status is \"ready_for_confirmation\" AND the customer\\'s last message clearly confirms (نعم, واه, أكد, ثبتلي, ديرلي, OK, oui, d\\'accord, confirmé): order_status=\"confirmed\". Reply with a short thank-you and say the team will call to confirm delivery.',\n'- If the customer changes something after the recap: update the field and go back to \"collecting\" / \"ready_for_confirmation\".',\n'- NEVER set \"confirmed\" on your own, on an ambiguous \"ok\", or when anything is missing. Cancellation: order_status=\"cancelled\", reply politely and briefly.',\n'',\n'# HUMAN HANDOFF (human_required=true, short polite holding reply)',\n'Angry customer; complaint; problem with a previous order; unknown price; product not found; contradictory information; the customer asks for the manager / a human; you cannot understand the request; confidence below 70.',\n'handoff_reason must be one of: complaint, unknown_price, unavailable_product, angry_customer, customer_requested_human, low_ai_confidence, technical_issue.',\n'',\n'# OFF-TOPIC AND SPAM',\n'- unrelated: reply in one short polite line that you only help with the shop\\'s products, then offer help. spam / insults / ads: intent=\"spam\", reply=\"\".',\n'',\n'# OUTPUT',\n'Return ONLY one JSON object. No markdown, no text before or after. Keys:',\n'{\"reply\": string, \"intent\": string, \"language\": \"ar\"|\"fr\"|\"mixed\", \"customer_type\": \"retail\"|\"wholesale\"|\"unknown\", \"product\": string, \"quantity\": number|null, \"size\": string, \"color\": string, \"customer_name\": string, \"phone\": string, \"wilaya\": string, \"commune\": string, \"delivery_notes\": string, \"order_status\": \"none\"|\"collecting\"|\"ready_for_confirmation\"|\"confirmed\"|\"cancelled\"|\"human_required\", \"human_required\": boolean, \"handoff_reason\": string, \"confidence\": number 0-100}',\n'',\n'# CATALOG',\nJSON.stringify(catalog),\n'',\n'# CURRENT STATE',\nJSON.stringify(state)\n].join('\\n');\n\nconst evc = Object.assign({}, ev); delete evc.products;\nreturn { json: { ev: evc, customer: cust, is_new: isNew, prev_status: state.order_status, state, products, paused, system_prompt: SYSTEM_PROMPT } };\n"
+      },
+      "id": "8a9b4623-0f34-4022-8b92-4fb34f3637e1",
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1936,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "5fc0524f-57c4-48f5-9864-355736924499",
+              "leftValue": "={{ $json.paused }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "585f80f0-20a9-43a0-be80-eb971d104003",
+      "name": "Bot Paused?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2176,
+        640
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "92332a7e-6556-43fd-8fa0-1dcf35731514",
+      "name": "Event Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3920,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "f1b1accc-35ca-40f5-b1d3-07591f6fe451",
+      "name": "Loop Over Events",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1456,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.ev.text }}",
+        "options": {
+          "systemMessage": "={{ $json.system_prompt }}",
+          "maxIterations": 3
+        }
+      },
+      "id": "4d0511c5-c761-46c1-86d1-fa772fad1905",
+      "name": "AI Sales Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        2416,
+        640
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-sonnet-5-5"
+        },
+        "options": {
+          "maxTokensToSample": 1024
+        }
+      },
+      "id": "c69844c0-35e5-48a7-9de0-2f5f9efa7110",
+      "name": "Claude Sonnet 5.5",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        2240,
+        896
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": null,
+          "name": ""
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Build Context').item.json.ev.wa_id }}",
+        "contextWindowLength": 12
+      },
+      "id": "3ac21ef0-5c0b-4536-8945-f91aa4ee3a0f",
+      "name": "Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        2464,
+        896
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b6d0aebf-94a0-45ae-b6f1-8410deb8a57d",
+      "name": "Calculator",
+      "type": "@n8n/n8n-nodes-langchain.toolCalculator",
+      "typeVersion": 1,
+      "position": [
+        2608,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse + validate the agent JSON. The AI decides, n8n enforces the business rules (runOnceForEachItem)\nconst c = $('Build Context').item.json;\nconst ev = c.ev, st = c.state, products = c.products || [], cust = c.customer || {};\nconst raw = $input.item.json;\n\nlet ai = {}, parse_error = '';\ntry {\n  if (raw.error) throw new Error(typeof raw.error === 'string' ? raw.error : (raw.error.message || 'AI request failed'));\n  const out = raw.output !== undefined ? raw.output : raw.text;\n  if (!out) throw new Error('Empty AI response');\n  const t = typeof out === 'string' ? out : JSON.stringify(out);\n  const a = t.indexOf('{'), b = t.lastIndexOf('}');\n  if (a < 0 || b < a) throw new Error('No JSON in AI response');\n  ai = JSON.parse(t.slice(a, b + 1));\n} catch (e) { parse_error = 'AI: ' + e.message; ai = {}; }\n\nconst S = v => (v === null || v === undefined) ? '' : String(v).trim();\nconst lower = v => S(v).toLowerCase();\nconst money = n => String(Math.round(Number(n))).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');\nconst nowLocal = () => new Date(Date.now() + 3600000).toISOString().replace('T', ' ').slice(0, 19);   // Algeria = UTC+1\n\nconst INTENTS = ['greeting','price_question','product_question','availability','size','color','delivery','wholesale_question','retail_purchase','wholesale_purchase','order_creation','order_confirmation','cancellation','complaint','human_required','unrelated','spam'];\nconst STATUSES = ['none','collecting','ready_for_confirmation','confirmed','cancelled','human_required'];\nconst HR = ['complaint','unknown_price','unavailable_product','angry_customer','customer_requested_human','low_ai_confidence','technical_issue'];\nconst intent = INTENTS.includes(ai.intent) ? ai.intent : 'unrelated';\nlet conf = Number(ai.confidence); if (!isFinite(conf)) conf = 0; if (conf > 0 && conf <= 1) conf *= 100;\nconst lang = ['ar','fr','mixed'].includes(ai.language) ? ai.language : 'ar';\nconst T = (ar, fr) => lang === 'fr' ? fr : ar;\nconst prev = c.prev_status || 'none';\n\n// ---- merge new info with stored state (never lose what we already know) ----\nconst m = {\n  customer_type: ['retail','wholesale'].includes(ai.customer_type) ? ai.customer_type : (st.customer_type || 'unknown'),\n  product: S(ai.product) || S(st.product),\n  quantity: Number(ai.quantity) > 0 ? Math.floor(Number(ai.quantity)) : (st.quantity || null),\n  size: S(ai.size) || S(st.size),\n  color: S(ai.color) || S(st.color),\n  customer_name: S(ai.customer_name) || S(st.customer_name),\n  phone: S(ai.phone) || S(st.phone),\n  wilaya: S(ai.wilaya) || S(st.wilaya),\n  commune: S(ai.commune) || S(st.commune),\n  notes: S(ai.delivery_notes) || S(st.notes)\n};\nconst ph = m.phone.replace(/[\\s.\\-()]/g, '').replace(/^\\+?213/, '0');\nm.phone = /^0[5-7]\\d{8}$/.test(ph) ? ph : '';\n\n// ---- product used for pricing / validation ----\nconst findProd = name => {\n  const n = lower(name); if (!n) return null;\n  return products.find(x => lower(x.name) === n) || products.find(x => lower(x.name).includes(n) || n.includes(lower(x.name))) || null;\n};\nconst prod = findProd(m.product);\nif (prod) m.product = prod.name;\nconst sizes = prod ? prod.sizes : [], colors = prod ? prod.colors : [];\n\nlet problem = '';\nif (prod && m.size && sizes.length && !sizes.some(x => lower(x) === lower(m.size))) problem = 'size';\nelse if (prod && m.color && colors.length && !colors.some(x => lower(x) === lower(m.color))) problem = 'color';\nelse if (prod && prod.stock !== null && m.quantity && prod.stock < m.quantity) problem = 'stock';\nconst clearInvalid = () => { if (problem === 'size') m.size = ''; if (problem === 'color') m.color = ''; if (problem === 'stock') m.quantity = null; };\nconst problemMsg = () => {\n  if (problem === 'size') return T('سمحلي هاد المقاس ماهوش متوفر 🙏 المقاسات المتوفرة: ' + sizes.join(' - '), 'Désolé, cette taille/pointure n\\'est pas disponible 🙏 Disponibles : ' + sizes.join(' - '));\n  if (problem === 'color') return T('سمحلي هاد اللون ماهوش متوفر 🙏 الألوان المتوفرة: ' + colors.join(' - '), 'Désolé, cette couleur n\\'est pas disponible 🙏 Disponibles : ' + colors.join(' - '));\n  return T('سمحلي الكمية هذي أكبر من المخزون المتوفر 🙏 المتوفر عندنا ' + prod.stock + ' فقط', 'Désolé, la quantité dépasse notre stock 🙏 Disponible : ' + prod.stock);\n};\n\n// ---- pricing (computed by n8n, never by the AI) ----\nlet unit = prod && prod.retail_price > 0 ? prod.retail_price : null;\nif (prod && m.customer_type === 'wholesale' && prod.wholesale_price > 0) {\n  const minq = prod.wholesale_min_quantity || 1;\n  if ((m.quantity || 0) >= minq) unit = prod.wholesale_price;      // below the minimum -> retail price\n}\nconst total = unit && m.quantity ? unit * m.quantity : null;\n\n// ---- missing fields ----\nconst missing = [];\nif (!m.product) missing.push('product');\nif (!m.quantity) missing.push('quantity');\nif (sizes.length && !m.size) missing.push('size');\nif (colors.length && !m.color) missing.push('color');\nif (!m.customer_name) missing.push('customer_name');\nif (!m.phone) missing.push('phone');\nif (!m.wilaya) missing.push('wilaya');\nif (!m.commune) missing.push('commune');\nconst ASK = {\n  product: ['أي منتج حابو؟', 'Quel produit souhaitez-vous ?'], quantity: ['شحال من قطعة حابها؟', 'Combien de pièces souhaitez-vous ?'],\n  size: ['واش هو المقاس؟', 'Quelle taille/pointure ?'], color: ['واللون اللي حابو؟', 'Et quelle couleur ?'],\n  customer_name: ['الاسم الكامل للتوصيل؟', 'Votre nom complet pour la livraison ?'], phone: ['رقم الهاتف تاعك (باش يتصلو بيك للتوصيل)؟', 'Votre numéro de téléphone ?'],\n  wilaya: ['من أي ولاية؟', 'Quelle wilaya ?'], commune: ['والبلدية؟', 'Et la commune ?']\n};\nconst askFor = f => T(ASK[f][0], ASK[f][1]);\nconst recap = () => {\n  const L = [T('تمام 👌', 'Parfait 👌'), m.product];\n  if (m.size) L.push(T('المقاس ', 'Taille ') + m.size);\n  if (m.color) L.push(T('اللون ', 'Couleur ') + m.color);\n  L.push(T('الكمية ', 'Quantité ') + m.quantity);\n  L.push(T('ولاية ', 'Wilaya ') + m.wilaya + ' - ' + m.commune);\n  L.push(T('السعر ', 'Prix ') + money(unit) + T(' دج للقطعة', ' DA/pièce') + (m.quantity > 1 ? T(' ← المجموع ', ' → Total ') + money(total) + T(' دج', ' DA') : ''));\n  if (prod && prod.delivery_info) L.push(T('التوصيل: ', 'Livraison : ') + prod.delivery_info);\n  L.push('', T('نأكدلك الطلب؟', 'Je confirme votre commande ?'));\n  return L.join('\\n');\n};\n\n// ---- order status state machine (double confirmation) ----\nlet reply = S(ai.reply);\nlet status = STATUSES.includes(ai.order_status) ? ai.order_status : prev;\nif (ai.should_create_order === true && status !== 'confirmed') status = 'confirmed';\nlet should_create = false, forceReply = false;\nif (status === 'confirmed') {\n  if (prev === 'ready_for_confirmation' && !missing.length && !problem && unit) should_create = true;\n  else { status = (missing.length || problem) ? 'collecting' : 'ready_for_confirmation'; forceReply = true; }   // customer never saw a recap\n}\nif (status === 'ready_for_confirmation' || forceReply) {\n  if (problem) { status = 'collecting'; reply = problemMsg(); clearInvalid(); }\n  else if (missing.length) { status = 'collecting'; reply = askFor(missing[0]); }\n  else if (!unit) { /* price unknown -> human below */ }\n  else { status = 'ready_for_confirmation'; reply = recap(); }\n} else if (problem) { clearInvalid(); if (status === 'collecting') reply = problemMsg(); }\n\n// ---- human handoff ----\nconst reasons = [], codes = [];\nconst addR = (code, text) => { codes.push(code); reasons.push(text); };\nif (parse_error) addR('technical_issue', parse_error);\nif (ai.human_required === true) addR(HR.includes(S(ai.handoff_reason)) ? S(ai.handoff_reason) : (intent === 'complaint' ? 'complaint' : (intent === 'human_required' ? 'customer_requested_human' : 'low_ai_confidence')), 'AI requested human');\nelse if (intent === 'complaint') addR('complaint', 'intent: complaint');\nelse if (intent === 'human_required') addR('customer_requested_human', 'intent: human_required');\nif (!parse_error && intent !== 'spam' && conf < 70) addR('low_ai_confidence', 'low confidence: ' + conf);\nif (!parse_error && !reply && intent !== 'spam') addR('technical_issue', 'empty reply');\nif (['collecting','ready_for_confirmation','confirmed'].includes(status) && !prod) addR('unavailable_product', 'product not found in PRODUCTS');\nif (['ready_for_confirmation','confirmed'].includes(status) && prod && !unit) addR('unknown_price', 'price unknown');\nconst human = reasons.length > 0 && intent !== 'spam';\nconst pause_bot = human && (ai.human_required === true || ['human_required','complaint'].includes(intent) || !!parse_error);\nif (human) {\n  should_create = false;\n  reply = T('سمحلي، راني نحوّلك لمسؤول يجاوبك في أقرب وقت 🙏', 'Désolé, je transmets votre demande à un responsable qui vous répondra très vite 🙏');\n  if (pause_bot) status = 'human_required';\n}\n\n// ---- order record ----\nconst now = nowLocal();\nlet order = null, order_id = '';\nif (should_create) {\n  order_id = 'ORD-' + now.slice(0, 10).replace(/-/g, '') + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();\n  order = {\n    order_id, date: now, customer_name: m.customer_name, phone: m.phone, facebook_user_id: ev.wa_id,\n    product: m.product, product_id: prod.id, customer_type: m.customer_type === 'wholesale' ? 'wholesale' : 'retail',\n    quantity: m.quantity, size: m.size, color: m.color, unit_price: unit, total,\n    wilaya: m.wilaya, commune: m.commune, delivery: prod.delivery_info || '', source: 'whatsapp',\n    notes: m.notes, status: 'new'\n  };\n  reply = reply + '\\n' + T('رقم الطلب: ', 'N° de commande : ') + order_id;\n}\nif (status === 'cancelled') should_create = false;\n\n// ---- WhatsApp formatting: plain text, *bold* only, max length ----\nreply = S(reply).split('**').join('*').split(String.fromCharCode(96)).join('').split(String.fromCharCode(10)).map(l => l.replace(/^#{1,6} +/, '')).join(String.fromCharCode(10)).slice(0, 3900);\n\n// ---- route ----\nlet route = 'reply';\nif (human) route = 'human';\nelse if (should_create) route = 'confirmed';\nelse if (intent === 'spam' || !reply) route = 'ignore';\n\nconst customer_row = {\n  facebook_user_id: ev.wa_id,\n  customer_name: m.customer_name, phone: m.phone, wilaya: m.wilaya, commune: m.commune,\n  customer_type: m.customer_type,\n  first_contact: S(cust.first_contact) || now, last_contact: now,\n  total_orders: (Number(cust.total_orders) || 0) + (should_create ? 1 : 0),\n  status: (human && pause_bot) ? 'human_required' : 'active',\n  order_status: status,\n  draft_json: JSON.stringify({ product: m.product, quantity: m.quantity, size: m.size, color: m.color, notes: m.notes }),\n  notes: S(cust.notes)\n};\n\nconst handoff = human ? {\n  id: 'HO-' + Date.now(), date: now, facebook_user_id: ev.wa_id, customer_name: m.customer_name,\n  reason: codes.join(','), last_customer_message: ev.text, status: 'open', assigned_to: '', created_at: now, resolved_at: ''\n} : null;\n\n// ---- structured alert params for WhatsApp TEMPLATE messages (no newline/tab, no run of >4 spaces, max 900 chars) ----\nconst clean = v => S(v).replace(/[\\r\\n]+/g, ' | ').replace(/\\t/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 900) || '-';\nconst itemTxt = order ? (order.product + (order.size ? ' / ' + order.size : '') + (order.color ? ' / ' + order.color : '') + ' x ' + order.quantity) : '';\nconst handoff_alert_params = human ? [codes.join(', ') + (parse_error ? ' (' + parse_error + ')' : ''), m.customer_name || '-', ev.wa_id, ev.text].map(clean) : [];\nconst order_alert_params = order ? [order_id, order.customer_name, order.phone, itemTxt, money(order.total), order.wilaya + '-' + order.commune].map(clean) : [];\nconst not_saved_alert_params = order ? [clean([order_id, order.customer_name, order.phone, itemTxt, 'المجموع ' + money(order.total) + ' دج', order.wilaya + '-' + order.commune, 'wa_id ' + ev.wa_id, order.notes ? 'ملاحظات: ' + order.notes : ''].filter(Boolean).join(' | '))] : [];\n\nreturn { json: {\n  ev, route, reply, intent, order_status: status, human_codes: codes, parse_error,\n  customer_row, order, handoff, handoff_alert_params, order_alert_params, not_saved_alert_params,\n  log_row: { date: now, facebook_user_id: ev.wa_id, customer_name: m.customer_name, customer_message: ev.text, bot_reply: reply, intent, order_status: status }\n} };\n"
+      },
+      "id": "ca15ffed-994b-492f-8cb5-024abebec277",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2704,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "habibi",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 306981349,
+          "mode": "list",
+          "cachedResultName": "CUSTOMERS",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=306981349"
+        },
+        "options": {}
+      },
+      "id": "a80bb151-7d8e-43dc-9141-4ea82dcdea57",
+      "name": "Save Customer State",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2944,
+        640
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": null,
+          "name": ""
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "8d26180c-7d0b-42f2-acf5-94aeec170494",
+                    "leftValue": "={{ $('Parse AI Response').item.json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "reply"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reply"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "df654fcc-6182-4fea-94d2-58e0db3a9969",
+                    "leftValue": "={{ $('Parse AI Response').item.json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "confirmed"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirmed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "4eea845f-45cd-4426-b250-a3dcf9c34126",
+                    "leftValue": "={{ $('Parse AI Response').item.json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "human"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "human"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "ba25df05-4372-4b43-b724-4cd2d7b7f82e",
+                    "leftValue": "={{ $('Parse AI Response').item.json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "ignore"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ignore"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d69790a4-a305-4abd-b83c-44b47b130c8a",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        3184,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $('Config').first().json.cfg_graph_version }}/{{ $('Parse AI Response').item.json.ev.phone_number_id }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: $('Parse AI Response').item.json.ev.wa_id, type: 'text', text: { body: $('Parse AI Response').item.json.reply, preview_url: false } }) }}",
+        "options": {}
+      },
+      "id": "45351def-c707-40bf-8579-2ed8fe32449f",
+      "name": "Send WhatsApp Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3664,
+        624
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "whatsAppApi": {
+          "id": null,
+          "name": ""
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c5f3b0aa-1d2e-4b7a-9a10-3e6d2f0b7e11",
+              "leftValue": "={{ JSON.stringify($json.error || '') }}",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              },
+              "rightValue": "131047"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "02910b45-2b6e-4c6e-9512-a55e8c435627",
+      "name": "24h Window Closed (131047)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4384,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.cfg_sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "WORKFLOW_ERRORS"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $now.toFormat('yyyy-MM-dd HH:mm:ss') }}",
+            "workflow": "={{ $workflow.name }}",
+            "node": "Send WhatsApp Reply",
+            "error_message": "={{ 'Customer reply NOT delivered (131047: 24h window closed). wa_id ' + $('Parse AI Response').item.json.ev.wa_id + ' | customer: ' + $('Parse AI Response').item.json.ev.text + ' | bot reply: ' + $('Parse AI Response').item.json.reply }}",
+            "execution": "={{ 'execution ' + $execution.id }}",
+            "alert_status": "not alerted (logged only)"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "workflow",
+              "displayName": "workflow",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "node",
+              "displayName": "node",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "execution",
+              "displayName": "execution",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_status",
+              "displayName": "alert_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "14ff14ba-aaa4-4db6-8265-b5e98792af5a",
+      "name": "Log Send Failure",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        5888,
+        304
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": null,
+          "name": ""
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.cfg_sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "MESSAGES"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $('Parse AI Response').item.json.log_row.date }}",
+            "facebook_user_id": "={{ $('Parse AI Response').item.json.log_row.facebook_user_id }}",
+            "customer_name": "={{ $('Parse AI Response').item.json.log_row.customer_name }}",
+            "customer_message": "={{ $('Parse AI Response').item.json.log_row.customer_message }}",
+            "bot_reply": "={{ $('Parse AI Response').item.json.log_row.bot_reply }}",
+            "intent": "={{ $('Parse AI Response').item.json.log_row.intent }}",
+            "order_status": "={{ $('Parse AI Response').item.json.log_row.order_status }}",
+            "send_status": "={{ $('Send WhatsApp Reply').item.json.error ? 'FAILED: ' + (JSON.stringify($('Send WhatsApp Reply').item.json.error).includes('131047') ? '131047 re-engagement window closed - ' : '') + ($('Send WhatsApp Reply').item.json.error.message || 'send error') : 'sent' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "facebook_user_id",
+              "displayName": "facebook_user_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "customer_message",
+              "displayName": "customer_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "bot_reply",
+              "displayName": "bot_reply",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "intent",
+              "displayName": "intent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "order_status",
+              "displayName": "order_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "send_status",
+              "displayName": "send_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "15e5e0c7-871c-49b0-820d-1d77a2013390",
+      "name": "Log Chat",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3920,
+        640
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": null,
+          "name": ""
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.cfg_sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "ORDERS"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "order_id": "={{ $('Parse AI Response').item.json.order.order_id ?? '' }}",
+            "date": "={{ $('Parse AI Response').item.json.order.date ?? '' }}",
+            "customer_name": "={{ $('Parse AI Response').item.json.order.customer_name ?? '' }}",
+            "phone": "={{ $('Parse AI Response').item.json.order.phone ?? '' }}",
+            "facebook_user_id": "={{ $('Parse AI Response').item.json.order.facebook_user_id ?? '' }}",
+            "product": "={{ $('Parse AI Response').item.json.order.product ?? '' }}",
+            "product_id": "={{ $('Parse AI Response').item.json.order.product_id ?? '' }}",
+            "customer_type": "={{ $('Parse AI Response').item.json.order.customer_type ?? '' }}",
+            "quantity": "={{ $('Parse AI Response').item.json.order.quantity ?? '' }}",
+            "size": "={{ $('Parse AI Response').item.json.order.size ?? '' }}",
+            "color": "={{ $('Parse AI Response').item.json.order.color ?? '' }}",
+            "unit_price": "={{ $('Parse AI Response').item.json.order.unit_price ?? '' }}",
+            "total": "={{ $('Parse AI Response').item.json.order.total ?? '' }}",
+            "wilaya": "={{ $('Parse AI Response').item.json.order.wilaya ?? '' }}",
+            "commune": "={{ $('Parse AI Response').item.json.order.commune ?? '' }}",
+            "delivery": "={{ $('Parse AI Response').item.json.order.delivery ?? '' }}",
+            "source": "={{ $('Parse AI Response').item.json.order.source ?? '' }}",
+            "notes": "={{ $('Parse AI Response').item.json.order.notes ?? '' }}",
+            "status": "={{ $('Parse AI Response').item.json.order.status ?? '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "order_id",
+              "displayName": "order_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "facebook_user_id",
+              "displayName": "facebook_user_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "product",
+              "displayName": "product",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "product_id",
+              "displayName": "product_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "customer_type",
+              "displayName": "customer_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quantity",
+              "displayName": "quantity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "size",
+              "displayName": "size",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "color",
+              "displayName": "color",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "unit_price",
+              "displayName": "unit_price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total",
+              "displayName": "total",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "wilaya",
+              "displayName": "wilaya",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "commune",
+              "displayName": "commune",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "delivery",
+              "displayName": "delivery",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "a3ef13cf-9214-4954-a5b7-099baf6bdb58",
+      "name": "Append Order",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3424,
+        480
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": null,
+          "name": ""
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Build ONE WhatsApp TEMPLATE message per owner number (runOnceForEachItem).\n// $json = output of Append Order (success or error) or of Log Human Handoff\nconst p = $('Parse AI Response').item.json;\nconst cfg = $('Config').first().json;\nconst S = v => (v === null || v === undefined) ? '' : String(v).trim();\nlet kind, template, title, params;\nif (p.route === 'human') { kind = 'human_handoff'; template = 'human_handoff_alert'; title = '🚨 تدخل بشري مطلوب'; params = p.handoff_alert_params; }\nelse if ($json.error) { kind = 'order_not_saved'; template = 'order_not_saved_alert'; title = '⚠️ الطلب ما تسجلش في الشيت! سجّله يدويا'; params = p.not_saved_alert_params; }\nelse { kind = 'new_order'; template = 'new_order_alert'; title = '🛒 طلب جديد'; params = p.order_alert_params; }\nconst clean = v => S(v).replace(/[\\r\\n]+/g, ' | ').replace(/\\t/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 900) || '-';\nconst cleaned = (params || []).map(clean);\nconst nums = S(cfg.cfg_owner_wa_id).split(/[,;]+/).map(x => x.split('').filter(c => c >= '0' && c <= '9').join('')).filter(x => x.length >= 8);\nconst uniq = nums.filter((x, i) => nums.indexOf(x) === i);\nconst mk = to => ({ to, payload: { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'template', template: { name: template, language: { code: 'ar' }, components: [{ type: 'body', parameters: cleaned.map(text => ({ type: 'text', text })) }] } } });\nconst alerts = uniq.length ? uniq.map(mk) : [{ to: '', payload: {}, no_owner: true }];   // never 0 items: a missing number must surface as a logged failure\nreturn { json: { kind, template, title, params: cleaned, alerts } };\n"
+      },
+      "id": "d5cf8808-035f-417f-bce0-5590ac365f6f",
+      "name": "Prep Owner Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3648,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "alerts",
+        "options": {}
+      },
+      "id": "01e9bd41-2bc3-428a-8593-b1e5d10f37db",
+      "name": "Split Owner Numbers",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        3872,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $('Config').first().json.cfg_graph_version }}/{{ $('Config').first().json.cfg_phone_number_id }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "id": "6ff0f811-d747-4482-887a-9b2bff40280a",
+      "name": "Send Owner Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4096,
+        832
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "whatsAppApi": {
+          "id": null,
+          "name": ""
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collapse the per-recipient sends back into ONE item (so the customer reply is sent once)\nconst sent = $input.all();\nconst al = $('Split Owner Numbers').all();\nconst prep = $('Prep Owner Alert').first().json;\nconst failures = [];\nsent.forEach((r, i) => {\n  const a = (al[i] && al[i].json) || {};\n  const e = r.json && r.json.error;\n  if (a.no_owner) failures.push('cfg_owner_wa_id is empty or invalid');\n  else if (e) failures.push(a.to + ': ' + S(typeof e === 'string' ? e : (e.message || JSON.stringify(e))).slice(0, 300));\n});\nfunction S(v) { return (v === null || v === undefined) ? '' : String(v).trim(); }\nconst ev = $('Parse AI Response').first().json.ev || {};\nreturn [{ json: {\n  kind: prep.kind, template: prep.template, failed: failures.length > 0, failures,\n  fail_text: failures.join(' ; ').slice(0, 900), wa_id: S(ev.wa_id),\n  fallback_text: prep.title + String.fromCharCode(10) + (prep.params || []).join(String.fromCharCode(10))\n}, pairedItem: { item: 0 } }];\n"
+      },
+      "id": "3718a538-9b10-4cd1-add6-70d50bbe2068",
+      "name": "Collect Alert Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4320,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "7b0c4e12-5a3d-4f68-9c21-d4e8a1b3c501",
+              "leftValue": "={{ $json.failed }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "aff99235-8fe9-4b32-8899-a7969752c0fb",
+      "name": "Alert Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4544,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.cfg_sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "WORKFLOW_ERRORS"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $now.toFormat('yyyy-MM-dd HH:mm:ss') }}",
+            "workflow": "={{ $workflow.name }}",
+            "node": "Send Owner Alert",
+            "error_message": "={{ 'Owner alert ' + $json.template + ' NOT delivered: ' + $json.fail_text + ' | customer wa_id: ' + $json.wa_id }}",
+            "execution": "={{ 'execution ' + $execution.id }}",
+            "alert_status": "FAILED"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "workflow",
+              "displayName": "workflow",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "node",
+              "displayName": "node",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "execution",
+              "displayName": "execution",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_status",
+              "displayName": "alert_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "97910758-d11b-4ca8-8e44-ccfaeabceab5",
+      "name": "Log Alert Failure",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        4768,
+        784
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": null,
+          "name": ""
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "3a9d6f20-8b14-4c7e-a5d3-1e2f9b8c7d02",
+              "leftValue": "={{ String($('Config').first().json.cfg_use_telegram_fallback).toLowerCase() === 'true' }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e5d9e551-15f8-42b4-bfc0-894e4d076943",
+      "name": "Use Telegram Fallback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4992,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Config').first().json.cfg_notify_chat_id }}",
+        "text": "={{ $('Collect Alert Results').item.json.fallback_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "46d7cf50-3fa9-46ae-80b0-19a4143e61e1",
+      "name": "Telegram Fallback",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        5488,
+        880
+      ],
+      "disabled": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.cfg_sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "HUMAN_HANDOFF"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id": "={{ $('Parse AI Response').item.json.handoff.id ?? '' }}",
+            "date": "={{ $('Parse AI Response').item.json.handoff.date ?? '' }}",
+            "facebook_user_id": "={{ $('Parse AI Response').item.json.handoff.facebook_user_id ?? '' }}",
+            "customer_name": "={{ $('Parse AI Response').item.json.handoff.customer_name ?? '' }}",
+            "reason": "={{ $('Parse AI Response').item.json.handoff.reason ?? '' }}",
+            "last_customer_message": "={{ $('Parse AI Response').item.json.handoff.last_customer_message ?? '' }}",
+            "status": "={{ $('Parse AI Response').item.json.handoff.status ?? '' }}",
+            "assigned_to": "={{ $('Parse AI Response').item.json.handoff.assigned_to ?? '' }}",
+            "created_at": "={{ $('Parse AI Response').item.json.handoff.created_at ?? '' }}",
+            "resolved_at": "={{ $('Parse AI Response').item.json.handoff.resolved_at ?? '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "facebook_user_id",
+              "displayName": "facebook_user_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reason",
+              "displayName": "reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_customer_message",
+              "displayName": "last_customer_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "assigned_to",
+              "displayName": "assigned_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "resolved_at",
+              "displayName": "resolved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "13f25f27-b1ce-4ffe-9e38-985048251c33",
+      "name": "Log Human Handoff",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3424,
+        800
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": null,
+          "name": ""
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## Setup (WhatsApp Cloud API)\n1. Config node: sheet id, phone_number_id (cfg_phone_number_id), optional WABA id, business name, cfg_owner_wa_id (digits only, comma-separated for several staff), cfg_use_telegram_fallback (true/false), Telegram chat id (only needed for the fallback)\n2. Verify Token OK?: replace REPLACE_WITH_VERIFY_TOKEN (same value as in Meta)\n3. Credentials: Google Sheets, Anthropic, WhatsApp API (permanent System User token + WABA id) for both send nodes; Telegram only for the optional fallback\n4. Meta App > WhatsApp > Configuration: Callback URL = https://YOUR-N8N/webhook/fb-sales-agent, Verify token = the same value, subscribe to the `messages` field\n5. Create and get approved 4 UTILITY templates (language ar): new_order_alert, human_handoff_alert, order_not_saved_alert, workflow_error_alert\n6. Sheet column facebook_user_id holds the customer wa_id (keep it TEXT); add a WORKFLOW_ERRORS tab: date, workflow, node, error_message, execution, alert_status\n7. Set the Error Workflow, then activate",
+        "height": 230,
+        "width": 520,
+        "color": 4
+      },
+      "id": "f173e1b0-a2fc-480a-9e04-0cf2bae97357",
+      "name": "Note 29",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Rules enforced by n8n (Parse AI Response)\n- No order before a double confirmation (previous status = ready_for_confirmation)\n- Prices/totals computed here, never by the AI\n- Size / color / stock / phone validated\n- Human handoff pauses the bot (CUSTOMERS.status = human_required)\n- Free-form replies only work within 24h of the customer's last message (error 131047 is logged FAILED in MESSAGES and WORKFLOW_ERRORS)\n- Owner alerts are approved TEMPLATE messages; a failed send is logged in WORKFLOW_ERRORS (Telegram only if cfg_use_telegram_fallback = true)",
+        "height": 264,
+        "width": 520,
+        "color": 5
+      },
+      "id": "ac3d9597-e1d0-4117-ad09-9367aade03df",
+      "name": "Note 30",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2656,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "content": "Chat memory is in-process (Simple Memory): it resets on n8n restart. The order state itself lives in the CUSTOMERS sheet and survives.",
+        "height": 110,
+        "width": 440,
+        "color": 6
+      },
+      "id": "6c07125b-66bc-4385-9b0e-d753e0562e0d",
+      "name": "Note 31",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2240,
+        1152
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "WhatsApp Webhook Verify (GET)": {
+      "main": [
+        [
+          {
+            "node": "Verify Token OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Token OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Challenge",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 403",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Webhook (POST)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Events": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Number Match?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Number Match?": {
+      "main": [
+        [
+          {
+            "node": "Get Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Products": {
+      "main": [
+        [
+          {
+            "node": "Pack Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pack Products": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Customer": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "Bot Paused?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bot Paused?": {
+      "main": [
+        [
+          {
+            "node": "Event Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Sales Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event Done": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Events": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Get Customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Sales Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Sonnet 5.5": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Sales Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Sales Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculator": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Sales Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Save Customer State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Customer State": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Append Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Human Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Event Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp Reply": {
+      "main": [
+        [
+          {
+            "node": "24h Window Closed (131047)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "24h Window Closed (131047)?": {
+      "main": [
+        [
+          {
+            "node": "Log Send Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Send Failure": {
+      "main": [
+        [
+          {
+            "node": "Log Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Chat": {
+      "main": [
+        [
+          {
+            "node": "Event Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Order": {
+      "main": [
+        [
+          {
+            "node": "Prep Owner Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prep Owner Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Owner Alert": {
+      "main": [
+        [
+          {
+            "node": "Split Owner Numbers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Owner Numbers": {
+      "main": [
+        [
+          {
+            "node": "Send Owner Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Owner Alert": {
+      "main": [
+        [
+          {
+            "node": "Collect Alert Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Alert Results": {
+      "main": [
+        [
+          {
+            "node": "Alert Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Failed?": {
+      "main": [
+        [
+          {
+            "node": "Log Alert Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send WhatsApp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Alert Failure": {
+      "main": [
+        [
+          {
+            "node": "Use Telegram Fallback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Telegram Fallback?": {
+      "main": [
+        [
+          {
+            "node": "Telegram Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send WhatsApp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Fallback": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Human Handoff": {
+      "main": [
+        [
+          {
+            "node": "Prep Owner Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "tags": []
+}

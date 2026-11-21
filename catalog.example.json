@@ -1,0 +1,14 @@
+{
+  "_example": true,
+  "products": [
+    {
+      "id": "P001",
+      "name": "Sample T-shirt",
+      "name_fr": "T-shirt exemple",
+      "category": "tops",
+      "tags": ["tshirt", "cotton"],
+      "price": 2500,
+      "colors": { "black": ["S", "M", "L"], "white": ["M", "L"] }
+    }
+  ]
+}

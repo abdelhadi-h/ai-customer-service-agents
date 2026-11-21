@@ -1,0 +1,8 @@
+{
+  "name": "Sample Shop",
+  "hours": { "open": "09:00", "close": "21:00" },
+  "delivery": {
+    "default": 600,
+    "wilayas": { "Alger": 400, "Mostaganem": 500 }
+  }
+}

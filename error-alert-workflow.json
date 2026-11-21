@@ -1,0 +1,393 @@
+{
+  "name": "Error Workflow - WhatsApp Sales Agent Alert",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "dc6f6355-cd1a-46d4-a530-677345fdce0f",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1a1f0c10-0001-4a00-8000-000000000001",
+              "name": "cfg_sheet_id",
+              "value": "YOUR_GOOGLE_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "1a1f0c10-0001-4a00-8000-000000000002",
+              "name": "cfg_phone_number_id",
+              "value": "REPLACE_WITH_PHONE_NUMBER_ID",
+              "type": "string"
+            },
+            {
+              "id": "1a1f0c10-0001-4a00-8000-000000000003",
+              "name": "cfg_owner_wa_id",
+              "value": "REPLACE_WITH_OWNER_WA_ID",
+              "type": "string"
+            },
+            {
+              "id": "1a1f0c10-0001-4a00-8000-000000000004",
+              "name": "cfg_graph_version",
+              "value": "v23.0",
+              "type": "string"
+            },
+            {
+              "id": "1a1f0c10-0001-4a00-8000-000000000005",
+              "name": "cfg_use_telegram_fallback",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "1a1f0c10-0001-4a00-8000-000000000006",
+              "name": "cfg_notify_chat_id",
+              "value": "REPLACE_TELEGRAM_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "31ff91dc-e822-45c9-8cb3-40013279b531",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Build ONE workflow_error_alert TEMPLATE message per owner number (runOnceForEachItem)\nconst cfg = $json;\nconst ex = $('Error Trigger').item.json;\nconst S = v => (v === null || v === undefined) ? '' : String(v).trim();\nconst clean = v => S(v).replace(/[\\r\\n]+/g, ' | ').replace(/\\t/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 900) || '-';\nconst e = (ex.execution && ex.execution.error) || {};\nconst params = [\n  ex.workflow && ex.workflow.name,\n  (ex.execution && ex.execution.lastNodeExecuted) || (e.node && e.node.name),\n  e.message || e.description,\n  ex.execution && ex.execution.url\n].map(clean);\nconst nums = S(cfg.cfg_owner_wa_id).split(/[,;]+/).map(x => x.split('').filter(c => c >= '0' && c <= '9').join('')).filter(x => x.length >= 8);\nconst uniq = nums.filter((x, i) => nums.indexOf(x) === i);\nconst mk = to => ({ to, payload: { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'template', template: { name: 'workflow_error_alert', language: { code: 'ar' }, components: [{ type: 'body', parameters: params.map(text => ({ type: 'text', text })) }] } } });\nconst alerts = uniq.length ? uniq.map(mk) : [{ to: '', payload: {}, no_owner: true }];\nreturn { json: { params, alerts } };\n"
+      },
+      "id": "a409d310-423a-4e18-b1bf-66005008307b",
+      "name": "Prep Error Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "alerts",
+        "options": {}
+      },
+      "id": "2af3b00d-ccf5-405f-bfb6-63e207c96b24",
+      "name": "Split Owner Numbers",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $('Config').first().json.cfg_graph_version }}/{{ $('Config').first().json.cfg_phone_number_id }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "id": "35a4bfcd-a3e7-4820-add8-9a64aadede5c",
+      "name": "Send Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collapse per-recipient sends into ONE item\nfunction S(v) { return (v === null || v === undefined) ? '' : String(v).trim(); }\nconst sent = $input.all();\nconst al = $('Split Owner Numbers').all();\nconst prep = $('Prep Error Alert').first().json;\nconst ex = $('Error Trigger').first().json;\nconst failures = [];\nsent.forEach((r, i) => {\n  const a = (al[i] && al[i].json) || {};\n  const e = r.json && r.json.error;\n  if (a.no_owner) failures.push('cfg_owner_wa_id is empty or invalid');\n  else if (e) failures.push(a.to + ': ' + S(typeof e === 'string' ? e : (e.message || JSON.stringify(e))).slice(0, 300));\n});\nconst nl = String.fromCharCode(10);\nreturn [{ json: {\n  failed: failures.length > 0, failures, fail_text: failures.join(' ; ').slice(0, 900),\n  alert_status: failures.length ? ('FAILED: ' + failures.join(' ; ').slice(0, 400)) : 'sent',\n  workflow: S(ex.workflow && ex.workflow.name),\n  node: S(ex.execution && ex.execution.lastNodeExecuted),\n  error_message: S(ex.execution && ex.execution.error && ex.execution.error.message).slice(0, 900),\n  execution: S(ex.execution && (ex.execution.url || ex.execution.id)),\n  fallback_text: '❗ ' + (prep.params || []).join(nl)\n}, pairedItem: { item: 0 } }];\n"
+      },
+      "id": "36989462-20fc-4685-a8cb-fd45a301eb2e",
+      "name": "Collect Alert Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.cfg_sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "WORKFLOW_ERRORS"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $now.toFormat('yyyy-MM-dd HH:mm:ss') }}",
+            "workflow": "={{ $json.workflow }}",
+            "node": "={{ $json.node }}",
+            "error_message": "={{ $json.error_message }}",
+            "execution": "={{ $json.execution }}",
+            "alert_status": "={{ $json.alert_status }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "workflow",
+              "displayName": "workflow",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "node",
+              "displayName": "node",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "execution",
+              "displayName": "execution",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_status",
+              "displayName": "alert_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "32110858-5ed8-4613-b3da-7fadcb01b1f5",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1344,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "2b7e9c40-6d15-4a83-b1f2-9c3d8e7a6b01",
+              "leftValue": "={{ $('Collect Alert Results').item.json.failed && String($('Config').first().json.cfg_use_telegram_fallback).toLowerCase() === 'true' }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f5a7bd10-1005-4289-bf4e-60cf9122b867",
+      "name": "Use Telegram Fallback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1568,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Config').first().json.cfg_notify_chat_id }}",
+        "text": "={{ $('Collect Alert Results').item.json.fallback_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "0a3e9e9d-6750-4b6e-b2c9-dae8511721fd",
+      "name": "Telegram Fallback",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1792,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Prep Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Error Alert": {
+      "main": [
+        [
+          {
+            "node": "Split Owner Numbers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Owner Numbers": {
+      "main": [
+        [
+          {
+            "node": "Send Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error Alert": {
+      "main": [
+        [
+          {
+            "node": "Collect Alert Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Alert Results": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error": {
+      "main": [
+        [
+          {
+            "node": "Use Telegram Fallback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Telegram Fallback?": {
+      "main": [
+        [
+          {
+            "node": "Telegram Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}
